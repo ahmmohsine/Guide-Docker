@@ -13,11 +13,12 @@ Ce dépôt constitue une base de référence technique sur les fondamentaux de *
 1. [Fondamentaux et Terminologie Docker](#1-fondamentaux-et-terminologie-docker)
 2. [Fonctionnement Interne (Sous le capot)](#2-fonctionnement-interne-sous-le-capot)
 3. [Conteneurs Docker vs Machines Virtuelles (VM)](#3-conteneurs-docker-vs-machines-virtuelles-vm)
-4. [Gestion du Stockage Persistant (Stateful vs Stateless)](#4-gestion-du-stockage-persistant-stateful-vs-stateless)
-5. [Sécurisation des Images et de l'Exécution](#5-sécurisation-des-images-et-de-lexécution)
+4. [Gestion du Stockage Persistant et des Données (Stateful)](#4-gestion-du-stockage-persistant-et-des-données-stateful)
+5. [Sécurisation des Images et de l'Exécution (Security by Design)](#5-sécurisation-des-images-et-de-lexécution-security-by-design)
 6. [Impact sur l'Agilité et la Scalabilité](#6-impact-sur-lagilité-et-la-scalabilité)
 7. [Évolutions Avancées : Observabilité & Supply Chain](#7-évolutions-avancées--observabilité--supply-chain)
 8. [Exemples Pratiques](#8-exemples-pratiques)
+9. [Cheatsheet : Commandes Docker & Docker Compose Essentielles](#9-cheatsheet--commandes-docker--docker-compose-essentielles)
 
 ---
 
@@ -54,34 +55,37 @@ Docker repose sur une architecture client-serveur utilisant la **virtualisation 
 | **Densité & Coûts** | Ressources figées (RAM/CPU pré-alloués), faible densité par serveur. | Allocation dynamique, densité 5 à 10x supérieure sur une même infrastructure. |
 | **Frontière d'isolation** | Isolation matérielle stricte au niveau du noyau (idéale pour le multi-tenant non fiable). | Isolation au niveau des processus (sécurisée via durcissement `non-root`, `seccomp`, `AppArmor`). |
 
-> **Architecture hybride en production :** En environnement Cloud, les conteneurs s'exécutent généralement **à l'intérieur** de VM Linux durcies — combinant la frontière d'isolation d'infrastructure des VM avec la vélocité et la densité des conteneurs.
+> **Coexistence pragmatique VM / Conteneurs :** L'adoption des conteneurs ne signifie pas la disparition totale des machines virtuelles. Nous conservons explicitement l'option VM pour les cas nécessitant une véritable frontière d'OS invité complète — comme les applications *legacy* non conteneurisables à court terme ou les charges de travail exigeant un noyau d'OS non supporté par l'hôte — tout en adoptant les conteneurs par défaut pour tous nos nouveaux services API afin de maximiser la reproductibilité et la vélocité opérationnelle.
 
 ---
 
-## 4. Gestion du Stockage Persistant (Stateful vs Stateless)
+## 4. Gestion du Stockage Persistant et des Données (Stateful)
 
-Un conteneur est **éphémère par conception** : toute donnée écrite dans son système de fichiers interne est perdue lors de sa suppression ou mise à jour.
+Pour lever les verrous liés à la persistance et à la sécurité de manière rigoureuse, nous appliquons le principe de **séparation stricte entre le code (stateless) et les données/secrets (stateful)**, couplé à une approche *Security by Design*.
 
-* **Développement local (`Named Volumes`) :** Utilisation de volumes nommés gérés par Docker dans `docker-compose.yml` (ex. `sqlserver_data:/var/opt/mssql`) pour découpler le cycle de vie des données de celui du conteneur.
-* **Production Cloud (`Services Managés / PaaS`) :** Les conteneurs applicatifs restent **100 % sans état (*stateless*)** et se connectent à des bases de données managées externes (ex. Azure SQL, PostgreSQL managé) qui gèrent nativement les sauvegardes et la haute disponibilité.
-* **Configuration externalisée :** Aucune chaîne de connexion ou clé API n'est intégrée à l'image. Elles sont injectées dynamiquement au démarrage via variables d'environnement ou gestionnaires de secrets (*Docker Secrets*, *Azure Key Vault*).
+Un conteneur est une instance d’exécution créée à partir d’une image. Comme un conteneur contient une couche inscriptible, il est **éphémère par nature** : cette couche inscriptible est détruite dès qu'il est supprimé ou mis à jour. Ne jamais stocker de données critiques à l'intérieur du système de fichiers d'un conteneur.
+
+* **Named Volumes pour le développement local :** En local (`docker-compose.yml`), nous découplons le cycle de vie de la base de données de celui du conteneur via des volumes nommés gérés par Docker (ex. `sql_data:/var/opt/mssql`). Le conteneur peut être détruit et recréé sans perte de données.
+* **Services managés en production (PaaS) :** En production cloud (ex. Azure), la meilleure pratique consiste à **ne pas héberger la base de données dans un conteneur**, mais à connecter nos API conteneurisées à un service managé externe (Azure SQL Database, PostgreSQL managé). Cela délègue les sauvegardes, la haute disponibilité et les mises à jour au fournisseur cloud tout en gardant nos conteneurs 100 % sans état (*stateless*).
+* **Externalisation de la configuration :** Aucune chaîne de connexion n'est codée en dur. Elles sont injectées dynamiquement au démarrage via des variables d'environnement ou montées en mémoire via des gestionnaires de secrets (Docker Secrets, Azure Key Vault).
 
 ---
 
-## 5. Sécurisation des Images et de l'Exécution
+## 5. Sécurisation des Images et de l'Exécution (Security by Design)
 
-L'application du principe *Security by Design* réduit la surface d'attaque dès la construction :
+La sécurité d’un conteneur dépend surtout de l’image dont il est issu : nous durcissons l’image dès la construction du `Dockerfile` :
 
-* **Builds multi-étapes (*Multi-stage builds*) :** Séparation stricte entre l'image de compilation (contenant le SDK et le code source) et l'image finale d'exécution (ne contenant que les binaires compilés).
-* **Images de base minimales (*Chiseled* / *Distroless*) :** Suppression des outils système superflus (`bash`, `curl`, gestionnaires de paquets) exploitables en cas d'intrusion.
-* **Exécution `non-root` obligatoire :** Définition explicite d'un utilisateur sans privilèges (`USER $APP_UID`) dans le `Dockerfile` afin d'éviter l'exécution sous `root` (UID 0).
-* **Système de fichiers en lecture seule & Scans CVE :** Exécution avec `--read-only` et analyse automatisée des vulnérabilités dans le pipeline CI/CD (via **Trivy** ou **Docker Scout**) avant tout déploiement.
+* **Builds multi-étapes (*Multi-stage builds*) :** Nous séparons l'environnement de compilation (qui contient le SDK, les outils de build et le code source) de l'image finale d'exécution. L'image déployée ne contient que les binaires compilés et le runtime strictement nécessaire.
+* **Images de base minimales (*Distroless* / *Chiseled*) :** Au lieu d'une distribution Linux complète embarquant `bash`, `curl` ou des gestionnaires de paquets exploitables par un attaquant, nous utilisons des images ultra-allégées (ex. images Ubuntu Chiseled de Microsoft pour .NET ou Alpine).
+* **Exécution non-root obligatoire :** Par défaut, un processus dans un conteneur tourne en tant que `root` (UID 0). Nous imposons systématiquement l'instruction `USER` dans le `Dockerfile` (ex. `USER $APP_UID`) afin qu'une faille applicative ne donne jamais de privilèges administrateur sur le conteneur ou l'hôte.
+* **Scan de vulnérabilités (CVE) en CI/CD et système de fichiers en lecture seule :** Chaque image est scannée automatiquement avant déploiement (via **Trivy** ou **Docker Scout**) pour bloquer toute faille critique, et exécutée avec l'option `--read-only` pour empêcher toute modification malveillante de fichiers à chaud.
 
 ---
 
 ## 6. Impact sur l'Agilité et la Scalabilité
 
-* **Vélocité CI/CD & *Zero-Fear Releases* :** Grâce au cache des couches Docker et à l'immuabilité des artefacts, les builds sont rapides, reproductibles de bout en bout et les retours arrière (*rollbacks*) sont immédiats.
+* **Flux de développement harmonisé :** Les développeurs démarrent en local des piles multi-services strictement identiques via une simple commande `docker compose up`, éliminant la configuration manuelle, les conflits de dépendances et l'effet *« ça marche sur ma machine »*.
+* **Vélocité CI/CD & *Zero-Fear Releases* :** Le pipeline passe de la maintenance de VM avec état à la promotion d'images immuables vérifiées par empreinte `SHA-256` de la préproduction vers la production, permettant des déploiements sans interruption (*zero-downtime*) et des retours arrière (*rollbacks*) instantanés.
 * **Mise à l'échelle élastique (*Auto-scaling*) :** Le démarrage quasi instantané d'images légères permet aux orchestrateurs (Kubernetes, Azure Container Apps) d'absorber les pics de charge en quelques secondes.
 * **Portabilité Multi-Cloud :** Le format standardisé OCI garantit l'exécution identique de l'application sur poste local, serveur on-premise ou n'importe quel fournisseur Cloud sans modification de code.
 
@@ -106,6 +110,7 @@ L'application du principe *Security by Design* réduit la surface d'attaque dès
 Un exemple complet d'architecture conteneurisée pour une **API Web .NET et SQL Server** (incluant un `Dockerfile` multi-stage durci avec image Chiseled, exécution `non-root`, `docker-compose.yml` avec volume nommé et isolation réseau) est disponible dans [`examples/dotnet-sqlserver`](./examples/dotnet-sqlserver).
 
 ---
+
 ## 9. Cheatsheet : Commandes Docker & Docker Compose Essentielles
 
 ### Cycle de vie des Images (Build & Registry)
@@ -118,8 +123,6 @@ Un exemple complet d'architecture conteneurisée pour une **API Web .NET et SQL 
 | **Inspecter les couches** | `docker history monapi:1.0` | Affiche la taille et l'instruction de chaque couche de l'image. |
 | **Pousser vers un Registry** | `docker push monregistry.azurecr.io/monapi:1.0` | Publie l'image vers un registre distant (Docker Hub, ACR, GHCR). |
 
----
-
 ### Exécution et Gestion des Conteneurs
 
 | Action | Commande | Description |
@@ -128,8 +131,6 @@ Un exemple complet d'architecture conteneurisée pour une **API Web .NET et SQL 
 | **Conteneurs actifs** | `docker ps` | Liste les conteneurs en cours d'exécution (`-a` pour inclure les arrêtés). |
 | **Arrêter / Démarrer** | `docker stop api` / `docker start api` | Arrête proprement (signal `SIGTERM`) ou redémarre un conteneur existant. |
 | **Supprimer un conteneur** | `docker rm -f api` | Force l'arrêt et la suppression d'un conteneur. |
-
----
 
 ### Orchestration Multi-Services (Docker Compose)
 
@@ -140,8 +141,6 @@ Un exemple complet d'architecture conteneurisée pour une **API Web .NET et SQL 
 | **Arrêter la stack** | `docker compose down` | Arrête et supprime les conteneurs et réseaux (conserve les volumes nommés). |
 | **Reset complet (Données)** | `docker compose down -v` | Supprime les conteneurs, réseaux **et les volumes nommés** (réinitialise la BDD). |
 
----
-
 ### Débogage, Logs et Inspection
 
 | Action | Commande | Description |
@@ -151,8 +150,6 @@ Un exemple complet d'architecture conteneurisée pour une **API Web .NET et SQL 
 | **Inspecter la configuration** | `docker inspect api` | Retourne toutes les métadonnées JSON (IP interne, volumes montés, variables, état). |
 | **Consommation ressources** | `docker stats` | Monitore en temps réel l'utilisation CPU, RAM et réseau de chaque conteneur. |
 | **Lister les volumes / réseaux** | `docker volume ls` / `docker network ls` | Vérifie la présence des volumes persistants et des réseaux isolés. |
-
----
 
 ### Nettoyage et Maintenance du Disque
 
