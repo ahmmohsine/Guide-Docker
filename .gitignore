@@ -1,0 +1,16 @@
+# Secrets et variables locales
+.env
+*.local
+
+# Dossiers de compilation .NET
+**/bin/
+**/obj/
+**/out/
+
+# Fichiers système et éditeurs
+.DS_Store
+Thumbs.db
+.vs/
+.vscode/
+*.user
+*.suo

@@ -17,6 +17,7 @@ Ce dépôt constitue une base de référence technique sur les fondamentaux de *
 5. [Sécurisation des Images et de l'Exécution](#5-sécurisation-des-images-et-de-lexécution)
 6. [Impact sur l'Agilité et la Scalabilité](#6-impact-sur-lagilité-et-la-scalabilité)
 7. [Évolutions Avancées : Observabilité & Supply Chain](#7-évolutions-avancées--observabilité--supply-chain)
+8. [Exemples Pratiques](#8-exemples-pratiques)
 
 ---
 
@@ -61,7 +62,7 @@ Docker repose sur une architecture client-serveur utilisant la **virtualisation 
 
 Un conteneur est **éphémère par conception** : toute donnée écrite dans son système de fichiers interne est perdue lors de sa suppression ou mise à jour.
 
-* **Développement local (`Named Volumes`) :** Utilisation de volumes nommés gérés par Docker dans `docker-compose.yml` (ex. `sql_data:/var/opt/mssql`) pour découpler le cycle de vie des données de celui du conteneur.
+* **Développement local (`Named Volumes`) :** Utilisation de volumes nommés gérés par Docker dans `docker-compose.yml` (ex. `sqlserver_data:/var/opt/mssql`) pour découpler le cycle de vie des données de celui du conteneur.
 * **Production Cloud (`Services Managés / PaaS`) :** Les conteneurs applicatifs restent **100 % sans état (*stateless*)** et se connectent à des bases de données managées externes (ex. Azure SQL, PostgreSQL managé) qui gèrent nativement les sauvegardes et la haute disponibilité.
 * **Configuration externalisée :** Aucune chaîne de connexion ou clé API n'est intégrée à l'image. Elles sont injectées dynamiquement au démarrage via variables d'environnement ou gestionnaires de secrets (*Docker Secrets*, *Azure Key Vault*).
 
@@ -100,6 +101,64 @@ L'application du principe *Security by Design* réduit la surface d'attaque dès
 
 ---
 
-## Contribution & Références
+## 8. Exemples Pratiques
 
-Ce guide est évolutif et sert de support d'architecture et de bonnes pratiques de développement Cloud-Native.
+Un exemple complet d'architecture conteneurisée pour une **API Web .NET et SQL Server** (incluant un `Dockerfile` multi-stage durci avec image Chiseled, exécution `non-root`, `docker-compose.yml` avec volume nommé et isolation réseau) est disponible dans [`examples/dotnet-sqlserver`](./examples/dotnet-sqlserver).
+
+---
+## 9. Cheatsheet : Commandes Docker & Docker Compose Essentielles
+
+### Cycle de vie des Images (Build & Registry)
+
+| Action | Commande | Description |
+| :--- | :--- | :--- |
+| **Construire une image** | `docker build -t monapi:1.0 .` | Construit une image à partir du `Dockerfile` courant avec un tag explicite. |
+| **Build sans cache** | `docker build --no-cache -t monapi:1.0 .` | Force la reconstruction complète de toutes les couches (*layers*). |
+| **Lister les images** | `docker images` | Affiche les images locales, leurs tags, identifiants et tailles. |
+| **Inspecter les couches** | `docker history monapi:1.0` | Affiche la taille et l'instruction de chaque couche de l'image. |
+| **Pousser vers un Registry** | `docker push monregistry.azurecr.io/monapi:1.0` | Publie l'image vers un registre distant (Docker Hub, ACR, GHCR). |
+
+---
+
+### Exécution et Gestion des Conteneurs
+
+| Action | Commande | Description |
+| :--- | :--- | :--- |
+| **Lancer un conteneur** | `docker run -d -p 5000:8080 --name api monapi:1.0` | Démarre un conteneur en arrière-plan (`-d`) avec mappage de port. |
+| **Conteneurs actifs** | `docker ps` | Liste les conteneurs en cours d'exécution (`-a` pour inclure les arrêtés). |
+| **Arrêter / Démarrer** | `docker stop api` / `docker start api` | Arrête proprement (signal `SIGTERM`) ou redémarre un conteneur existant. |
+| **Supprimer un conteneur** | `docker rm -f api` | Force l'arrêt et la suppression d'un conteneur. |
+
+---
+
+### Orchestration Multi-Services (Docker Compose)
+
+| Action | Commande | Description |
+| :--- | :--- | :--- |
+| **Démarrer la stack** | `docker compose up -d --build` | Reconstruit les images modifiées et lance tous les services en arrière-plan. |
+| **État des services** | `docker compose ps` | Affiche l'état, les ports et le statut `healthcheck` de chaque service. |
+| **Arrêter la stack** | `docker compose down` | Arrête et supprime les conteneurs et réseaux (conserve les volumes nommés). |
+| **Reset complet (Données)** | `docker compose down -v` | Supprime les conteneurs, réseaux **et les volumes nommés** (réinitialise la BDD). |
+
+---
+
+### Débogage, Logs et Inspection
+
+| Action | Commande | Description |
+| :--- | :--- | :--- |
+| **Suivre les logs en direct** | `docker compose logs -f api` | Affiche les sorties `stdout`/`stderr` en temps réel (`--tail 100` pour limiter). |
+| **Ouvrir un shell interactif** | `docker exec -it api /bin/sh` | Ouvre un terminal dans le conteneur (indisponible sur les images *Chiseled*/*Distroless*). |
+| **Inspecter la configuration** | `docker inspect api` | Retourne toutes les métadonnées JSON (IP interne, volumes montés, variables, état). |
+| **Consommation ressources** | `docker stats` | Monitore en temps réel l'utilisation CPU, RAM et réseau de chaque conteneur. |
+| **Lister les volumes / réseaux** | `docker volume ls` / `docker network ls` | Vérifie la présence des volumes persistants et des réseaux isolés. |
+
+---
+
+### Nettoyage et Maintenance du Disque
+
+| Action | Commande | Description |
+| :--- | :--- | :--- |
+| **Espace disque utilisé** | `docker system df` | Affiche l'espace occupé par les images, conteneurs, volumes et cache de build. |
+| **Nettoyer les images orphelines** | `docker image prune -a` | Supprime toutes les images non associées à un conteneur actif. |
+| **Purger le cache de build** | `docker builder prune` | Libère l'espace disque consommé par le cache interne de BuildKit. |
+| **Nettoyage global sécurisé** | `docker system prune` | Supprime conteneurs arrêtés, réseaux inutilisés et images *dangling* (épargne les volumes). |
